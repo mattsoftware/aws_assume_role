@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+HOMEDIR=~/.aws_assume_role
+ALIASES=$(cat $HOMEDIR/aliases | jq '.')
+ENV=0
+SESSION_NAME=
+
+while [[ ! -z $@ ]]; do
+    case $1 in
+        --env)
+            ENV=1
+            ;;
+        --role)
+            shift
+            ROLE=$1
+            ;;
+        --role=*)
+            ROLE=$(echo $1 | cut -d= -f 2);
+            ;;
+        --session)
+            shift
+            SESSION_NAME=$1
+            ;;
+        --session=*)
+            SESSION_NAME=$(echo $1 | cut -d= -f 2);
+            ;;
+    esac
+    shift
+done
+
+[ -z $ROLE ] && echo "Please provide a role arn or alias (current aliases: $(echo "$ALIASES" | jq '.|keys|join(", ")' -r))" && exit
+
+ROLE_ARN=$(echo $ALIASES | jq ".[\"$ROLE\"]" -r)
+if [[ "$ROLE_ARN" != "null" ]]; then
+    SESSION_NAME=$ROLE
+else
+    ROLE_ARN=$ROLE
+fi
+
+[ -z $SESSION_NAME ] && echo "Please provide a session name" && exit
+
+ASSUME_ROLE=$(aws sts assume-role --role-arn "$ROLE_ARN" --role-session-name "$SESSION_NAME" 2>/dev/null)
+[ -z "$ASSUME_ROLE" ] && echo "Unable to switch roles" && exit
+
+ROLE_ACCESS_KEY_ID=$(echo $ASSUME_ROLE | jq '.Credentials.AccessKeyId' -r)
+ROLE_SECRET_ACCESS_KEY=$(echo $ASSUME_ROLE | jq '.Credentials.SecretAccessKey' -r)
+ROLE_SESSION_TOKEN=$(echo $ASSUME_ROLE | jq '.Credentials.SessionToken' -r)
+
+if [[ $ENV == 1 ]]; then
+    echo export AWS_ACCESS_KEY_ID=$ROLE_ACCESS_KEY_ID
+    echo export AWS_SECRET_ACCESS_KEY=$ROLE_SECRET_ACCESS_KEY
+    echo export AWS_SESSION_TOKEN=$ROLE_SESSION_TOKEN
+else
+    unset AWS_PROFILE
+    SESSION_DIR="$HOMEDIR/sessions/$SESSION_NAME"
+    mkdir -p $SESSION_DIR
+    PS1="[aws:$SESSION_NAME] " AWS_ACCESS_KEY_ID=$ROLE_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$ROLE_SECRET_ACCESS_KEY AWS_SESSION_TOKEN=$ROLE_SESSION_TOKEN HISTFILE="$SESSION_DIR/bash_history" bash
+fi
+
